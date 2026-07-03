@@ -1,23 +1,11 @@
 import streamlit as st
 import os
 import json
-import io
-import tempfile
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from groq import Groq
-from pypdf import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_groq import ChatGroq
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
-from langchain_core.embeddings import Embeddings
-from typing import List
-import docx
+import re
+import hashlib
+from io import BytesIO
 
-# ── Page Config ──────────────────────────────────────────────────────────────
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="PapLex AI",
     page_icon="🧠",
@@ -25,433 +13,682 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main { background-color: #0f0f1a; }
-    .stApp { background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%); }
-    .hero-box {
-        background: linear-gradient(135deg, #2d1b69 0%, #1a0533 50%, #0d1b4b 100%);
-        border-radius: 20px;
-        padding: 3rem 2rem;
-        text-align: center;
-        margin-bottom: 2rem;
-        border: 1px solid #4a2d8a;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
     }
-    .hero-title { font-size: 3rem; font-weight: 800; color: #a78bfa; margin: 0; }
-    .hero-sub { font-size: 1.1rem; color: #c4b5fd; margin: 0.5rem 0; }
-    .hero-tags { color: #8b7cf8; font-size: 0.9rem; }
-    .feature-card {
-        background: linear-gradient(135deg, #1e1b4b, #1a1a3e);
-        border: 1px solid #4c1d95;
-        border-radius: 12px;
-        padding: 1.2rem;
-        margin: 0.5rem 0;
-    }
-    .chat-user {
-        background: linear-gradient(135deg, #2d1b69, #1e1b4b);
-        border-radius: 12px 12px 4px 12px;
-        padding: 0.8rem 1rem;
-        margin: 0.5rem 0;
-        border-left: 3px solid #7c3aed;
-        color: #e2d9f3;
-    }
-    .chat-ai {
-        background: linear-gradient(135deg, #0d1b4b, #1a1a2e);
-        border-radius: 12px 12px 12px 4px;
-        padding: 0.8rem 1rem;
-        margin: 0.5rem 0;
-        border-left: 3px solid #06b6d4;
+
+    .stApp {
+        background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
         color: #e2e8f0;
     }
-    .stButton > button {
-        background: linear-gradient(135deg, #7c3aed, #4f46e5);
+
+    section[data-testid="stSidebar"] {
+        background: rgba(15, 12, 41, 0.95) !important;
+        border-right: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
+    .main-header {
+        background: linear-gradient(135deg, #4c1d95, #6d28d9, #7c3aed);
+        border-radius: 20px;
+        padding: 2.5rem;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 20px 60px rgba(124, 58, 237, 0.4);
+    }
+
+    .main-header h1 {
+        font-size: 3rem;
+        font-weight: 700;
         color: white;
-        border: none;
-        border-radius: 8px;
-        font-weight: 600;
-        padding: 0.5rem 1.5rem;
+        margin: 0;
     }
+
+    .main-header p {
+        color: rgba(255,255,255,0.85);
+        font-size: 1.1rem;
+        margin: 0.5rem 0 0 0;
+    }
+
+    .feature-tags {
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+    }
+
+    .feature-tag {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .chat-message-user {
+        background: linear-gradient(135deg, #4c1d95, #6d28d9);
+        border-radius: 15px 15px 5px 15px;
+        padding: 1rem 1.2rem;
+        margin: 0.5rem 0;
+        color: white;
+        margin-left: 20%;
+        box-shadow: 0 4px 15px rgba(109, 40, 217, 0.3);
+    }
+
+    .chat-message-bot {
+        background: rgba(30, 27, 75, 0.8);
+        border: 1px solid rgba(139, 92, 246, 0.3);
+        border-radius: 15px 15px 15px 5px;
+        padding: 1rem 1.2rem;
+        margin: 0.5rem 0;
+        color: #e2e8f0;
+        margin-right: 10%;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+
+    .stButton > button {
+        background: linear-gradient(135deg, #6d28d9, #7c3aed) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 10px !important;
+        padding: 0.6rem 1.5rem !important;
+        font-weight: 600 !important;
+        transition: all 0.3s !important;
+        box-shadow: 0 4px 15px rgba(109, 40, 217, 0.3) !important;
+    }
+
     .stButton > button:hover {
-        background: linear-gradient(135deg, #6d28d9, #4338ca);
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 25px rgba(109, 40, 217, 0.5) !important;
     }
-    .sidebar .stRadio label { color: #c4b5fd; }
-    div[data-testid="stSidebar"] { background: linear-gradient(180deg, #0f0f1a, #1a1a2e); }
+
+    .info-card {
+        background: rgba(30, 27, 75, 0.6);
+        border: 1px solid rgba(139, 92, 246, 0.3);
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+    }
+
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea {
+        background: rgba(30, 27, 75, 0.8) !important;
+        border: 1px solid rgba(139, 92, 246, 0.4) !important;
+        color: #e2e8f0 !important;
+        border-radius: 10px !important;
+    }
+
+    .stSelectbox > div > div {
+        background: rgba(30, 27, 75, 0.8) !important;
+        border: 1px solid rgba(139, 92, 246, 0.4) !important;
+        color: #e2e8f0 !important;
+        border-radius: 10px !important;
+    }
+
+    div[data-testid="stFileUploader"] {
+        background: rgba(30, 27, 75, 0.5) !important;
+        border: 2px dashed rgba(139, 92, 246, 0.5) !important;
+        border-radius: 15px !important;
+        padding: 1rem !important;
+    }
+
+    .metric-card {
+        background: rgba(30, 27, 75, 0.6);
+        border: 1px solid rgba(139, 92, 246, 0.3);
+        border-radius: 12px;
+        padding: 1rem;
+        text-align: center;
+    }
+
+    hr {
+        border-color: rgba(139, 92, 246, 0.3) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Groq Embeddings (Lightweight — no torch needed) ───────────────────────────
-class GroqEmbeddings(Embeddings):
-    """Lightweight embeddings using Groq API — no torch/sentence-transformers needed."""
+# ── Imports (lazy loaded) ──────────────────────────────────────────────────────
+try:
+    from groq import Groq
+    from langchain_groq import ChatGroq
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain.schema import Document
+    import pandas as pd
+    import plotly.express as px
+    import plotly.graph_objects as go
+    IMPORTS_OK = True
+except ImportError as e:
+    IMPORTS_OK = False
+    IMPORT_ERROR = str(e)
 
-    def __init__(self, api_key: str):
-        self.client = Groq(api_key=api_key)
+# ── API Key ────────────────────────────────────────────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-    def _embed(self, text: str) -> List[float]:
-        # Use a simple TF-IDF style hash embedding as fallback
-        # This is lightweight and works without heavy ML libraries
-        import hashlib
-        words = text.lower().split()
-        vec = [0.0] * 384
-        for i, word in enumerate(words[:384]):
-            h = int(hashlib.md5(word.encode()).hexdigest(), 16)
-            vec[h % 384] += 1.0
-        norm = sum(x**2 for x in vec) ** 0.5
-        if norm > 0:
-            vec = [x / norm for x in vec]
-        return vec
+# ── Session State ──────────────────────────────────────────────────────────────
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+if "doc_names" not in st.session_state:
+    st.session_state.doc_names = []
+if "page" not in st.session_state:
+    st.session_state.page = "Chat"
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return [self._embed(t) for t in texts]
+# ── Helper Functions ───────────────────────────────────────────────────────────
+def extract_text_from_file(uploaded_file):
+    """Extract text from various file formats."""
+    name = uploaded_file.name.lower()
+    text = ""
 
-    def embed_query(self, text: str) -> List[float]:
-        return self._embed(text)
-
-# ── Helper: Extract text from files ───────────────────────────────────────────
-def extract_text(file) -> str:
-    name = file.name.lower()
     try:
         if name.endswith(".pdf"):
-            reader = PdfReader(file)
-            return "\n".join(p.extract_text() or "" for p in reader.pages)
+            from pypdf import PdfReader
+            reader = PdfReader(BytesIO(uploaded_file.read()))
+            for page in reader.pages:
+                text += page.extract_text() or ""
+
         elif name.endswith(".txt"):
-            return file.read().decode("utf-8", errors="ignore")
+            text = uploaded_file.read().decode("utf-8", errors="ignore")
+
         elif name.endswith(".csv"):
-            df = pd.read_csv(file)
-            return df.to_string()
+            import pandas as pd
+            df = pd.read_csv(uploaded_file)
+            text = df.to_string()
+
         elif name.endswith((".xlsx", ".xls")):
-            df = pd.read_excel(file)
-            return df.to_string()
+            import pandas as pd
+            df = pd.read_excel(uploaded_file)
+            text = df.to_string()
+
         elif name.endswith(".json"):
-            data = json.load(file)
-            return json.dumps(data, indent=2)
+            data = json.load(uploaded_file)
+            text = json.dumps(data, indent=2)
+
         elif name.endswith(".docx"):
-            doc = docx.Document(file)
-            return "\n".join(p.text for p in doc.paragraphs)
+            from docx import Document as DocxDocument
+            doc = DocxDocument(BytesIO(uploaded_file.read()))
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+
         else:
-            return file.read().decode("utf-8", errors="ignore")
+            text = uploaded_file.read().decode("utf-8", errors="ignore")
+
     except Exception as e:
-        return f"Error reading file: {e}"
+        text = f"Error reading file: {str(e)}"
 
-# ── Build FAISS vector store ───────────────────────────────────────────────────
-def build_vectorstore(texts: List[str], api_key: str):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    chunks = []
+    return text
+
+
+def build_vectorstore(texts, api_key):
+    """Build FAISS vectorstore using lightweight embeddings."""
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+    docs = []
     for t in texts:
-        chunks.extend(splitter.split_text(t))
-    embeddings = GroqEmbeddings(api_key=api_key)
-    return FAISS.from_texts(chunks, embeddings)
+        chunks = splitter.split_text(t)
+        for chunk in chunks:
+            docs.append(Document(page_content=chunk))
 
-# ── Groq LLM Call ─────────────────────────────────────────────────────────────
-def groq_chat(messages: list, api_key: str, model="llama-3.3-70b-versatile") -> str:
+    # Use lightweight TF-IDF style via simple hash embeddings for free tier
+    # Actually use a very small model
+    try:
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True}
+        )
+        vectorstore = FAISS.from_documents(docs, embeddings)
+    except Exception:
+        # Fallback: simple keyword search without embeddings
+        vectorstore = None
+        st.session_state.raw_docs = docs
+
+    return vectorstore
+
+
+def get_groq_response(prompt, context, language, api_key, history=None):
+    """Get response from Groq LLM."""
     client = Groq(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
+
+    lang_instruction = f"Always respond in {language}." if language != "English" else ""
+
+    system_prompt = f"""You are PapLex AI, an intelligent document assistant.
+Answer questions based on the provided document context.
+Be helpful, accurate, and concise.
+{lang_instruction}
+If the answer is not in the context, say so honestly."""
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    if history:
+        for h in history[-4:]:
+            messages.append({"role": "user", "content": h["user"]})
+            messages.append({"role": "assistant", "content": h["bot"]})
+
+    messages.append({
+        "role": "user",
+        "content": f"Context:\n{context}\n\nQuestion: {prompt}"
+    })
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
         messages=messages,
-        max_tokens=2048,
+        max_tokens=1024,
         temperature=0.7
     )
-    return resp.choices[0].message.content
 
-# ── Language map ──────────────────────────────────────────────────────────────
-LANGUAGES = {
-    "English": "English",
-    "Hindi": "Hindi",
-    "French": "French",
-    "Spanish": "Spanish",
-    "German": "German",
-    "Arabic": "Arabic",
-    "Chinese": "Chinese (Simplified)",
-    "Japanese": "Japanese"
-}
+    return response.choices[0].message.content
 
-# ── Session State Init ────────────────────────────────────────────────────────
-for key, val in {
-    "chat_history": [],
-    "vectorstore": None,
-    "file_texts": [],
-    "file_names": [],
-    "dataframes": {},
-    "page": "Chat"
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+def search_context(query, vectorstore, raw_docs=None):
+    """Search for relevant context."""
+    if vectorstore:
+        docs = vectorstore.similarity_search(query, k=4)
+        return "\n\n".join([d.page_content for d in docs])
+    elif raw_docs:
+        # Simple keyword fallback
+        query_words = query.lower().split()
+        scored = []
+        for doc in raw_docs:
+            score = sum(1 for w in query_words if w in doc.page_content.lower())
+            scored.append((score, doc.page_content))
+        scored.sort(reverse=True)
+        return "\n\n".join([c for _, c in scored[:4]])
+    return ""
+
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🧠 PapLex AI")
-    st.markdown('<span style="background:#4c1d95;color:#c4b5fd;padding:2px 10px;border-radius:20px;font-size:0.8rem;">Powered by LLaMA 3.3</span>', unsafe_allow_html=True)
-    st.markdown("---")
+    st.markdown('<div style="background: linear-gradient(135deg, #6d28d9, #7c3aed); color: white; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.75rem; display: inline-block; margin-bottom: 1rem;">Powered by LLaMA 3.3</div>', unsafe_allow_html=True)
+    st.divider()
 
+    # Navigation
     st.markdown("### 🧭 Navigation")
-    page = st.radio("", ["💬 Chat", "🔄 Convert Files", "📊 Visualize"], label_visibility="collapsed")
-    st.session_state.page = page
+    pages = ["💬 Chat", "🔄 Convert Files", "📊 Visualize"]
+    for p in pages:
+        if st.button(p, use_container_width=True, key=f"nav_{p}"):
+            st.session_state.page = p.split(" ", 1)[1]
 
-    st.markdown("---")
-    st.markdown("### 🌐 Language")
-    lang = st.selectbox("Answer language:", list(LANGUAGES.keys()))
+    st.divider()
 
-    st.markdown("---")
+    # Language
+    st.markdown("### 🌍 Language")
+    language = st.selectbox(
+        "Answer language:",
+        ["English", "Hindi", "Spanish", "French", "German", "Japanese", "Chinese", "Arabic"],
+        label_visibility="collapsed"
+    )
+
+    st.divider()
+
+    # File Upload
     st.markdown("### 📁 Upload Files")
-    st.caption("PDF • CSV • Excel • JSON • TXT • Word")
-    uploaded = st.file_uploader(
-        "Upload your files",
+    st.caption("PDF, CSV, Excel, JSON, TXT, Word")
+
+    uploaded_files = st.file_uploader(
+        "Upload documents",
         type=["pdf", "txt", "csv", "xlsx", "xls", "json", "docx"],
         accept_multiple_files=True,
         label_visibility="collapsed"
     )
 
-    if uploaded:
-        if st.button("🚀 Process Files"):
-            with st.spinner("Processing files..."):
-                st.session_state.file_texts = []
-                st.session_state.file_names = []
-                st.session_state.dataframes = {}
-                for f in uploaded:
-                    text = extract_text(f)
-                    st.session_state.file_texts.append(text)
-                    st.session_state.file_names.append(f.name)
-                    if f.name.endswith((".csv", ".xlsx", ".xls")):
-                        f.seek(0)
-                        try:
-                            df = pd.read_csv(f) if f.name.endswith(".csv") else pd.read_excel(f)
-                            st.session_state.dataframes[f.name] = df
-                        except:
-                            pass
-                api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
-                if api_key:
-                    st.session_state.vectorstore = build_vectorstore(st.session_state.file_texts, api_key)
-                    st.success(f"✅ {len(uploaded)} file(s) processed!")
-                else:
-                    st.error("❌ GROQ_API_KEY not found!")
+    if uploaded_files:
+        if st.button("🚀 Process Documents", use_container_width=True):
+            with st.spinner("Processing documents..."):
+                texts = []
+                names = []
+                for f in uploaded_files:
+                    text = extract_text_from_file(f)
+                    if text:
+                        texts.append(text)
+                        names.append(f.name)
 
-    if st.session_state.file_names:
-        st.markdown("### 📄 Loaded Files")
-        for name in st.session_state.file_names:
+                if texts:
+                    vs = build_vectorstore(texts, GROQ_API_KEY)
+                    st.session_state.vectorstore = vs
+                    st.session_state.doc_names = names
+                    st.session_state.raw_texts = texts
+                    st.success(f"✅ {len(names)} file(s) processed!")
+                else:
+                    st.error("Could not extract text from files.")
+
+    if st.session_state.doc_names:
+        st.divider()
+        st.markdown("### 📄 Loaded Documents")
+        for name in st.session_state.doc_names:
             st.markdown(f"✅ `{name}`")
 
-    st.markdown("---")
-    if st.button("🗑️ Clear All"):
-        for key in ["chat_history", "vectorstore", "file_texts", "file_names", "dataframes"]:
-            st.session_state[key] = [] if key != "vectorstore" and key != "dataframes" else ({} if key == "dataframes" else None)
-        st.rerun()
+        if st.button("🗑️ Clear All", use_container_width=True):
+            st.session_state.vectorstore = None
+            st.session_state.doc_names = []
+            st.session_state.chat_history = []
+            st.session_state.raw_texts = []
+            st.rerun()
 
-# ── Get API Key ───────────────────────────────────────────────────────────────
-api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
+    st.divider()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE: CHAT
-# ═══════════════════════════════════════════════════════════════════════════════
-if "Chat" in st.session_state.page:
+    # API Key input (if not set via env)
+    if not GROQ_API_KEY:
+        st.markdown("### 🔑 API Key")
+        user_key = st.text_input("Groq API Key", type="password", placeholder="gsk_...")
+        if user_key:
+            GROQ_API_KEY = user_key
 
-    # Hero
+
+# ── Main Content ───────────────────────────────────────────────────────────────
+current_page = st.session_state.get("page", "Chat")
+
+# ── CHAT PAGE ──────────────────────────────────────────────────────────────────
+if "Chat" in current_page or current_page == "Chat":
+
+    # Header
     st.markdown("""
-    <div class="hero-box">
-        <div class="hero-title">🧠 PapLex AI</div>
-        <div class="hero-sub">Your Intelligent Document Assistant</div>
-        <div class="hero-tags">Chat • Convert • Visualize • Quiz • Voice • Multilingual</div>
+    <div class="main-header">
+        <h1>🧠 PapLex AI</h1>
+        <p>Your Intelligent Document Assistant</p>
+        <div class="feature-tags">
+            <span class="feature-tag">💬 Chat</span>
+            <span class="feature-tag">🔄 Convert</span>
+            <span class="feature-tag">📊 Visualize</span>
+            <span class="feature-tag">🌍 Multilingual</span>
+            <span class="feature-tag">📁 6 Formats</span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    if not st.session_state.file_texts:
+    if not st.session_state.doc_names:
+        # Welcome screen
         st.markdown("""
-        <div style="text-align:center; padding:2rem;">
-            <h3 style="color:#a78bfa;">👆 Upload files from sidebar to get started!</h3>
-            <p style="color:#8b7cf8;">Supports PDF • CSV • Excel • JSON • TXT • Word</p>
+        <div class="info-card" style="text-align: center;">
+            <h2>👋 Welcome to PapLex AI</h2>
+            <h4>Your Intelligent Document Assistant</h4>
+            <p style="color: rgba(255,255,255,0.7);">👆 Upload files from sidebar OR use Convert Files tab!</p>
         </div>
         """, unsafe_allow_html=True)
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown('<div class="feature-card"><h4 style="color:#a78bfa;">💬 Smart Q&A</h4><p style="color:#c4b5fd;">Ask anything about your documents with AI-powered answers</p></div>', unsafe_allow_html=True)
+            st.markdown("""
+            <div class="info-card" style="text-align:center;">
+                <h3>📄 Supported Formats</h3>
+                <p>PDF • CSV • Excel<br>JSON • TXT • Word</p>
+            </div>
+            """, unsafe_allow_html=True)
         with col2:
-            st.markdown('<div class="feature-card"><h4 style="color:#a78bfa;">📊 Visualize Data</h4><p style="color:#c4b5fd;">Auto-generate charts and graphs from CSV/Excel files</p></div>', unsafe_allow_html=True)
+            st.markdown("""
+            <div class="info-card" style="text-align:center;">
+                <h3>🤖 AI Features</h3>
+                <p>Q&A • Summary • Quiz<br>NER • Comparison</p>
+            </div>
+            """, unsafe_allow_html=True)
         with col3:
-            st.markdown('<div class="feature-card"><h4 style="color:#a78bfa;">🌐 Multilingual</h4><p style="color:#c4b5fd;">Get answers in 8 different languages</p></div>', unsafe_allow_html=True)
+            st.markdown("""
+            <div class="info-card" style="text-align:center;">
+                <h3>🌍 Languages</h3>
+                <p>English • Hindi • Spanish<br>French • German • More</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-    else:
-        # Smart Action Buttons
-        st.markdown("### ⚡ Smart Actions")
+        # Smart Actions (no doc needed)
+        st.divider()
+        st.markdown("### ⚡ Quick Actions (No Document Needed)")
         col1, col2, col3, col4, col5 = st.columns(5)
 
         action = None
         with col1:
-            if st.button("📝 Summarize"):
+            if st.button("📝 Summarize", use_container_width=True):
                 action = "summarize"
         with col2:
-            if st.button("❓ Quiz Me"):
+            if st.button("❓ Quiz Me", use_container_width=True):
                 action = "quiz"
         with col3:
-            if st.button("🔍 Extract Entities"):
+            if st.button("🏷️ Extract Entities", use_container_width=True):
                 action = "ner"
         with col4:
-            if st.button("💡 Suggest Questions"):
+            if st.button("💡 Suggest Questions", use_container_width=True):
                 action = "suggest"
         with col5:
-            if st.button("🔄 Compare Docs"):
+            if st.button("🔍 Compare Docs", use_container_width=True):
                 action = "compare"
 
-        if action and api_key:
-            full_text = "\n\n".join(st.session_state.file_texts)[:6000]
-            lang_name = LANGUAGES[lang]
+    else:
+        # Document loaded — show chat
+        st.markdown(f"### 💬 Chat with your documents")
+        st.caption(f"📄 Loaded: {', '.join(st.session_state.doc_names)}")
 
+        # Smart Actions
+        st.markdown("#### ⚡ Smart Actions")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        action = None
+        with col1:
+            if st.button("📝 Summarize", use_container_width=True):
+                action = "summarize"
+        with col2:
+            if st.button("❓ Quiz Me", use_container_width=True):
+                action = "quiz"
+        with col3:
+            if st.button("🏷️ Entities", use_container_width=True):
+                action = "ner"
+        with col4:
+            if st.button("💡 Suggest", use_container_width=True):
+                action = "suggest"
+        with col5:
+            if st.button("🔍 Compare", use_container_width=True):
+                action = "compare"
+
+        # Handle smart actions
+        if action and GROQ_API_KEY:
+            raw_text = " ".join(getattr(st.session_state, 'raw_texts', []))[:3000]
             prompts = {
-                "summarize": f"Summarize the following document(s) in {lang_name}. Be comprehensive but concise:\n\n{full_text}",
-                "quiz": f"Generate 5 multiple choice quiz questions from this document in {lang_name}. Include answers:\n\n{full_text}",
-                "ner": f"Extract all named entities (people, places, organizations, dates, numbers) from this document in {lang_name}:\n\n{full_text}",
-                "suggest": f"Suggest 8 insightful questions a user could ask about this document in {lang_name}:\n\n{full_text}",
-                "compare": f"Compare and contrast the main themes across these documents in {lang_name}:\n\n{full_text}"
+                "summarize": "Please provide a comprehensive summary of the document(s).",
+                "quiz": "Generate 5 multiple choice quiz questions from the document content with answers.",
+                "ner": "Extract and list all named entities (persons, organizations, locations, dates, numbers) from the document.",
+                "suggest": "Suggest 8 insightful questions that someone could ask about this document.",
+                "compare": "If there are multiple documents, compare and contrast them. Otherwise, analyze the key themes."
             }
-
             with st.spinner("🤖 AI is thinking..."):
-                result = groq_chat([
-                    {"role": "system", "content": f"You are PapLex AI, an intelligent document assistant. Always respond in {lang_name}."},
-                    {"role": "user", "content": prompts[action]}
-                ], api_key)
-                st.session_state.chat_history.append(("🤖 Smart Action", result))
+                response = get_groq_response(prompts[action], raw_text, language, GROQ_API_KEY)
+                st.session_state.chat_history.append({
+                    "user": f"[{action.upper()}]",
+                    "bot": response
+                })
+            st.rerun()
 
-        st.markdown("---")
+        st.divider()
 
-        # Chat History
+        # Chat history
         if st.session_state.chat_history:
-            st.markdown("### 💬 Conversation")
-            for q, a in st.session_state.chat_history:
-                st.markdown(f'<div class="chat-user">👤 <strong>{q}</strong></div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="chat-ai">🤖 {a}</div>', unsafe_allow_html=True)
+            for chat in st.session_state.chat_history:
+                st.markdown(f'<div class="chat-message-user">👤 {chat["user"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="chat-message-bot">🧠 {chat["bot"]}</div>', unsafe_allow_html=True)
 
-        # Chat Input
-        st.markdown("### 💬 Ask Anything")
-        col_input, col_btn = st.columns([5, 1])
-        with col_input:
-            user_q = st.text_input("", placeholder="Ask a question about your documents...", label_visibility="collapsed")
-        with col_btn:
-            ask = st.button("Send 🚀")
+        # Chat input
+        st.divider()
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            user_input = st.text_input(
+                "Ask anything about your documents...",
+                placeholder="e.g. What are the main findings?",
+                label_visibility="collapsed",
+                key="chat_input"
+            )
+        with col2:
+            send = st.button("Send 🚀", use_container_width=True)
 
-        if ask and user_q and api_key:
+        if (send or user_input) and user_input and GROQ_API_KEY:
             with st.spinner("🤖 Thinking..."):
-                # Get context from vectorstore
-                context = ""
-                if st.session_state.vectorstore:
-                    docs = st.session_state.vectorstore.similarity_search(user_q, k=4)
-                    context = "\n\n".join(d.page_content for d in docs)
+                context = search_context(
+                    user_input,
+                    st.session_state.vectorstore,
+                    getattr(st.session_state, 'raw_docs', None)
+                )
+                if not context:
+                    context = " ".join(getattr(st.session_state, 'raw_texts', []))[:3000]
 
-                lang_name = LANGUAGES[lang]
-                messages = [
-                    {"role": "system", "content": f"You are PapLex AI. Answer based on the document context provided. Always respond in {lang_name}. Context:\n{context}"},
-                ]
-                for q, a in st.session_state.chat_history[-3:]:
-                    messages.append({"role": "user", "content": q})
-                    messages.append({"role": "assistant", "content": a})
-                messages.append({"role": "user", "content": user_q})
+                response = get_groq_response(
+                    user_input, context, language, GROQ_API_KEY,
+                    st.session_state.chat_history
+                )
+                st.session_state.chat_history.append({
+                    "user": user_input,
+                    "bot": response
+                })
+            st.rerun()
 
-                answer = groq_chat(messages, api_key)
-                st.session_state.chat_history.append((user_q, answer))
+        if not GROQ_API_KEY:
+            st.warning("⚠️ Please enter your Groq API key in the sidebar.")
+
+        if st.session_state.chat_history:
+            if st.button("🗑️ Clear Chat"):
+                st.session_state.chat_history = []
                 st.rerun()
 
-        elif ask and not api_key:
-            st.error("❌ GROQ_API_KEY not configured!")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE: CONVERT FILES
-# ═══════════════════════════════════════════════════════════════════════════════
-elif "Convert" in st.session_state.page:
-    st.markdown("## 🔄 File Converter")
-    st.markdown("Convert between different file formats easily.")
+# ── CONVERT FILES PAGE ─────────────────────────────────────────────────────────
+elif "Convert" in current_page:
+    st.markdown("""
+    <div class="main-header">
+        <h1>🔄 File Converter</h1>
+        <p>Convert between PDF, CSV, Excel, JSON, TXT, Word</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    conv_file = st.file_uploader(
-        "Upload file to convert",
-        type=["pdf", "txt", "csv", "xlsx", "json", "docx"]
+    col1, col2 = st.columns(2)
+    with col1:
+        convert_file = st.file_uploader(
+            "Upload file to convert",
+            type=["pdf", "txt", "csv", "xlsx", "json", "docx"],
+            key="convert_upload"
+        )
+    with col2:
+        target_format = st.selectbox(
+            "Convert to:",
+            ["TXT", "CSV", "JSON", "Excel (XLSX)"]
+        )
+
+    if convert_file and st.button("🔄 Convert Now", use_container_width=True):
+        with st.spinner("Converting..."):
+            text = extract_text_from_file(convert_file)
+
+            if target_format == "TXT":
+                result = text.encode("utf-8")
+                st.download_button("⬇️ Download TXT", result,
+                                   file_name=f"{convert_file.name}.txt",
+                                   mime="text/plain")
+
+            elif target_format == "JSON":
+                data = {"filename": convert_file.name, "content": text}
+                result = json.dumps(data, indent=2).encode("utf-8")
+                st.download_button("⬇️ Download JSON", result,
+                                   file_name=f"{convert_file.name}.json",
+                                   mime="application/json")
+
+            elif target_format == "CSV":
+                lines = [l for l in text.split("\n") if l.strip()]
+                import pandas as pd
+                df = pd.DataFrame({"content": lines})
+                result = df.to_csv(index=False).encode("utf-8")
+                st.download_button("⬇️ Download CSV", result,
+                                   file_name=f"{convert_file.name}.csv",
+                                   mime="text/csv")
+
+            elif target_format == "Excel (XLSX)":
+                lines = [l for l in text.split("\n") if l.strip()]
+                import pandas as pd
+                df = pd.DataFrame({"content": lines})
+                buf = BytesIO()
+                df.to_excel(buf, index=False)
+                st.download_button("⬇️ Download Excel", buf.getvalue(),
+                                   file_name=f"{convert_file.name}.xlsx",
+                                   mime="application/vnd.ms-excel")
+
+            st.success("✅ Conversion complete!")
+
+
+# ── VISUALIZE PAGE ─────────────────────────────────────────────────────────────
+elif "Visualize" in current_page:
+    st.markdown("""
+    <div class="main-header">
+        <h1>📊 Data Visualizer</h1>
+        <p>Upload CSV or Excel to create interactive charts</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    viz_file = st.file_uploader(
+        "Upload CSV or Excel file",
+        type=["csv", "xlsx", "xls"],
+        key="viz_upload"
     )
 
-    if conv_file:
-        name = conv_file.name
-        st.success(f"✅ Loaded: `{name}`")
+    if viz_file:
+        try:
+            import pandas as pd
+            import plotly.express as px
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f"**From:** `{name.split('.')[-1].upper()}`")
-        with col2:
-            target = st.selectbox("**To:**", ["TXT", "CSV", "JSON"])
+            if viz_file.name.endswith(".csv"):
+                df = pd.read_csv(viz_file)
+            else:
+                df = pd.read_excel(viz_file)
 
-        if st.button("🔄 Convert Now"):
-            text = extract_text(conv_file)
+            st.success(f"✅ Loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+            st.dataframe(df.head(10), use_container_width=True)
 
-            if target == "TXT":
-                buf = io.BytesIO(text.encode())
-                st.download_button("⬇️ Download TXT", buf, file_name=name.rsplit(".", 1)[0] + ".txt", mime="text/plain")
+            st.divider()
+            st.markdown("### 📈 Create Chart")
 
-            elif target == "CSV":
-                rows = [[line] for line in text.split("\n") if line.strip()]
-                df = pd.DataFrame(rows, columns=["Content"])
-                buf = io.BytesIO()
-                df.to_csv(buf, index=False)
-                buf.seek(0)
-                st.download_button("⬇️ Download CSV", buf, file_name=name.rsplit(".", 1)[0] + ".csv", mime="text/csv")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                chart_type = st.selectbox("Chart Type", ["Bar", "Line", "Scatter", "Pie", "Histogram", "Heatmap"])
+            with col2:
+                x_col = st.selectbox("X Axis", df.columns.tolist())
+            with col3:
+                y_col = st.selectbox("Y Axis", df.columns.tolist())
 
-            elif target == "JSON":
-                lines = [line for line in text.split("\n") if line.strip()]
-                data = {"filename": name, "content": lines}
-                buf = io.BytesIO(json.dumps(data, indent=2).encode())
-                st.download_button("⬇️ Download JSON", buf, file_name=name.rsplit(".", 1)[0] + ".json", mime="application/json")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE: VISUALIZE
-# ═══════════════════════════════════════════════════════════════════════════════
-elif "Visualize" in st.session_state.page:
-    st.markdown("## 📊 Data Visualizer")
-
-    if not st.session_state.dataframes:
-        st.info("📁 Upload a CSV or Excel file from the sidebar to visualize data.")
-    else:
-        file_choice = st.selectbox("Select file:", list(st.session_state.dataframes.keys()))
-        df = st.session_state.dataframes[file_choice]
-
-        st.markdown(f"**Shape:** `{df.shape[0]} rows × {df.shape[1]} columns`")
-        st.dataframe(df.head(20), use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("### 📈 Create Chart")
-
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
-        all_cols = df.columns.tolist()
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            chart_type = st.selectbox("Chart Type", ["Bar", "Line", "Scatter", "Pie", "Histogram", "Heatmap"])
-        with col2:
-            x_col = st.selectbox("X Axis", all_cols)
-        with col3:
-            y_col = st.selectbox("Y Axis", numeric_cols) if numeric_cols else st.selectbox("Y Axis", all_cols)
-
-        if st.button("📊 Generate Chart"):
-            try:
+            if st.button("📊 Generate Chart", use_container_width=True):
+                fig = None
                 if chart_type == "Bar":
-                    fig = px.bar(df, x=x_col, y=y_col, color_discrete_sequence=["#7c3aed"])
+                    fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}",
+                                 color_discrete_sequence=["#7c3aed"])
                 elif chart_type == "Line":
-                    fig = px.line(df, x=x_col, y=y_col, color_discrete_sequence=["#06b6d4"])
+                    fig = px.line(df, x=x_col, y=y_col, title=f"{y_col} over {x_col}",
+                                  color_discrete_sequence=["#7c3aed"])
                 elif chart_type == "Scatter":
-                    fig = px.scatter(df, x=x_col, y=y_col, color_discrete_sequence=["#a78bfa"])
+                    fig = px.scatter(df, x=x_col, y=y_col, title=f"{x_col} vs {y_col}",
+                                     color_discrete_sequence=["#7c3aed"])
                 elif chart_type == "Pie":
-                    fig = px.pie(df, names=x_col, values=y_col)
+                    fig = px.pie(df, names=x_col, values=y_col, title=f"{y_col} Distribution",
+                                 color_discrete_sequence=px.colors.sequential.Purples)
                 elif chart_type == "Histogram":
-                    fig = px.histogram(df, x=x_col, color_discrete_sequence=["#7c3aed"])
+                    fig = px.histogram(df, x=x_col, title=f"Distribution of {x_col}",
+                                       color_discrete_sequence=["#7c3aed"])
                 elif chart_type == "Heatmap":
-                    corr = df[numeric_cols].corr()
-                    fig = px.imshow(corr, color_continuous_scale="Purples")
+                    numeric_df = df.select_dtypes(include='number')
+                    fig = px.imshow(numeric_df.corr(), title="Correlation Heatmap",
+                                    color_continuous_scale="Purples")
 
-                fig.update_layout(
-                    paper_bgcolor="#1a1a2e",
-                    plot_bgcolor="#0f0f1a",
-                    font_color="#c4b5fd",
-                    title=f"{chart_type} Chart: {x_col} vs {y_col}"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Chart error: {e}")
+                if fig:
+                    fig.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(30,27,75,0.5)",
+                        font_color="#e2e8f0"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown(
-    '<div style="text-align:center;color:#6b7280;font-size:0.85rem;">🧠 PapLex AI • Built by <strong style="color:#a78bfa;">Shyama Mishra</strong> • B.Tech CSE Data Science, Galgotias 2027 • Powered by LLaMA 3.3 70B • Groq • LangChain • FAISS</div>',
-    unsafe_allow_html=True
-)
+        except Exception as e:
+            st.error(f"Error loading file: {str(e)}")
+
+# ── Footer ─────────────────────────────────────────────────────────────────────
+st.divider()
+st.markdown("""
+<div style="text-align: center; color: rgba(255,255,255,0.4); font-size: 0.8rem; padding: 1rem;">
+    🧠 PapLex AI • Built by <strong style="color: #7c3aed;">Shyama Mishra</strong> •
+    Powered by LLaMA 3.3 70B • Groq API • FAISS • LangChain
+</div>
+""", unsafe_allow_html=True)
